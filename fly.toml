@@ -1,0 +1,20 @@
+app = "netsgroup-server"
+kill_signal = "SIGINT"
+kill_timeout = 5
+processes = []
+
+[env]
+NODE_ENV = "production"
+
+[build]
+  image = "node:20-alpine"
+
+[[services]]
+  internal_port = 3000
+  protocol = "tcp"
+
+  [[services.ports]]
+    port = 80
+
+  [[services.ports]]
+    port = 443
