@@ -1,90 +1,103 @@
-// server.js
 import express from "express";
 import cors from "cors";
-import crypto from "crypto";
+import fetch from "node-fetch";
+import CryptoJS from "crypto-js";
 
 const app = express();
 app.use(cors());
 app.use(express.json());
 
-// Memorizziamo in memoria i pagamenti ricevuti (puoi sostituire con un DB)
-let payments = [];
-
-// Config test
 const secretKey = "1234567890test";
 const keyId = "TEST001";
+const statoOptions = ["libero", "checkin", "checkout", "annulato", "prenotato"];
 
-// Funzione per generare TXID casuale
-const generateTxId = () => Math.floor(100000 + Math.random() * 900000).toString();
+function generateTxId() {
+  const letters = Array.from({ length: 3 }, () =>
+    String.fromCharCode(65 + Math.floor(Math.random() * 26))
+  ).join("");
+  const numbers = Math.floor(Math.random() * 90000 + 10000);
+  return `${numbers}${letters}`;
+}
 
-// Funzione per generare HMAC-SHA256 in Base64
-const computeHttpSignature = (secretKey, keyId, signingHeaders, messageHeaders) => {
-  const signingBase = signingHeaders.map(h => `${h.toLowerCase()}: ${messageHeaders[h]}`).join("\n");
-  const hmac = crypto.createHmac("sha256", secretKey).update(signingBase).digest("base64");
-  return `Signature keyId="${keyId}",algorithm="hmac-sha256",headers="${signingHeaders.join(
-    " "
-  )}",signature="${hmac}"`;
-};
-
-// --- Endpoint di inizializzazione pagamento
-app.post("/payment/init", (req, res) => {
-  const body = req.body;
-
-  // Generiamo TXID casuale
-  const txId = generateTxId();
-  body.txHead.txId = txId;
-
-  // Creiamo digest SHA-256 del body
-  const bodyString = JSON.stringify(body);
-  const sha256digest = crypto.createHash("sha256").update(bodyString).digest("base64");
-  const digest = `SHA-256=${sha256digest}`;
-
-  // Headers fittizi
-  const date = new Date().toUTCString();
-  const url = "/MONEYNET_CG_SERVICES/pgw/payment/init";
-  const messageHeaders = {
-    host: "testapif.netsgroup.com",
-    date,
-    digest,
-    "(request-target)": `post ${url}`,
+function computeHttpSignature(secretKey, keyId, signingHeaders, messageHeaders) {
+  let signingBase = signingHeaders.map(h => `${h.toLowerCase()}: ${messageHeaders[h]}`).join("\n");
+  const signingHash = CryptoJS.HmacSHA256(signingBase, secretKey);
+  const signatureOptions = {
+    keyId,
+    algorithm: "hmac-sha256",
+    headers: signingHeaders,
+    signature: CryptoJS.enc.Base64.stringify(signingHash),
   };
-  const authorization = computeHttpSignature(secretKey, keyId, ["host", "date", "(request-target)", "digest"], messageHeaders);
+  let signature = 'Signature keyId="${keyId}",algorithm="${algorithm}",headers="${headers}",signature="${signature}"';
+  Object.keys(signatureOptions).forEach(key => {
+    const pattern = "${" + key + "}";
+    const value = typeof signatureOptions[key] !== "string" ? signatureOptions[key].join(" ") : signatureOptions[key];
+    signature = signature.replace(pattern, value);
+  });
+  return signature;
+}
 
-  // Simuliamo la risposta della piattaforma
-  const response = {
-    txHead: {
-      merId: keyId,
-      txId,
-      resultCode: "IGFS_000",
-      errDescription: "",
-    },
-    paymentId: Math.floor(Math.random() * 1e15).toString(),
-    redirectURL: `https://testpayf.netsgroup.com/MONEYNET_CG_WEB/app/cc/main/show?referenceData=${txId}`,
-  };
+app.get("/init-payment", async (req, res) => {
+  try {
+    const url = "https://testapif.netsgroup.com/MONEYNET_CG_SERVICES/pgw/payment/init";
+    const date = new Date().toGMTString();
+    const body = JSON.stringify({
+      txHead: {
+        merId: keyId,
+        txId: generateTxId()
+      },
+      txReq: {
+        txOp: "SALE",
+        amount: { value: 0, currency: "EUR" }
+      },
+      poiInfo: { pitype: "CC" },
+      buyer: {
+        email: "mario.rossi@email.com",
+        language: "IT",
+        name: "DAVIDE",
+        lastName: "MONTAPERTO",
+        msisdn: "+391231234567",
+        homePhone: "+391231234567",
+        workPhone: "+391231234567",
+        account: "123455-0233939",
+        imei: "356938035643809"
+      },
+      payer: { name: "DAVIDE", lastName: "MONTAPERTO" },
+      callbackURL: "https://testeps.netswgroup.it/IGFS_CG_API/jsp/xml/notification/notify.jsp",
+      errorURL: "https://www.merchant.com/error",
+      notifyURL: "https://testeps.netswgroup.it/IGFS_CG_API/jsp/xml/notification/notify.jsp"
+    });
 
-  // Salviamo il pagamento in memoria
-  payments.push({ ...body, response });
+    const sha256digest = CryptoJS.SHA256(body);
+    const digest = "SHA-256=" + CryptoJS.enc.Base64.stringify(sha256digest);
 
-  res.json(response);
+    const uri = "/MONEYNET_CG_SERVICES/pgw/payment/init";
+    const host = "testapif.netsgroup.com";
+    const method = "post";
+
+    const messageHeaders = { host, date, digest, "(request-target)": `${method} ${uri}` };
+    const authorization = computeHttpSignature(secretKey, keyId, ["host","date","(request-target)","digest"], messageHeaders);
+
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        host,
+        date,
+        digest,
+        authorization
+      },
+      body
+    });
+
+    const data = await response.json();
+    res.json(data);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Errore nel server" });
+  }
 });
 
-// --- Endpoint di notifica server-to-server
-app.post("/payment/notify", (req, res) => {
-  const notification = req.body;
-
-  console.log("NOTIFICA RICEVUTA:", notification);
-
-  // Salviamo la notifica in memoria
-  payments.push({ notification });
-
-  // Rispondiamo subito 200 OK
-  res.sendStatus(200);
-});
-
-// --- Endpoint per recuperare pagamenti (facoltativo, per test frontend)
-app.get("/payments", (req, res) => {
-  res.json(payments);
-});
-
+// Porta dinamica Fly.io
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+app.listen(PORT, () => console.log(`Server in ascolto su port ${PORT}`));

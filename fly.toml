@@ -1,20 +1,30 @@
-app = "netsgroup-server"
-kill_signal = "SIGINT"
-kill_timeout = 5
-processes = []
+# fly.toml app configuration file generated for server-noloe on 2025-11-17T17:36:35+01:00
+#
+# See https://fly.io/docs/reference/configuration/ for information about how to use this file.
+#
 
-[env]
-NODE_ENV = "production"
+app = 'server-noloe'
+primary_region = 'fra'
+kill_signal = 'SIGINT'
+kill_timeout = '5s'
 
 [build]
-  image = "node:20-alpine"
+  image = 'node:20-alpine'
+
+[env]
+  NODE_ENV = 'production'
 
 [[services]]
+  protocol = 'tcp'
   internal_port = 3000
-  protocol = "tcp"
 
   [[services.ports]]
     port = 80
 
   [[services.ports]]
     port = 443
+
+[[vm]]
+  memory = '1gb'
+  cpu_kind = 'shared'
+  cpus = 1
